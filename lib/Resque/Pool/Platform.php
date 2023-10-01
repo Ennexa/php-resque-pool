@@ -181,7 +181,7 @@ class Platform
     protected function log($msg)
     {
         if ($this->logger) {
-            $this->logger->log($msg);
+            $this->logger->info($msg);
         }
     }
 }

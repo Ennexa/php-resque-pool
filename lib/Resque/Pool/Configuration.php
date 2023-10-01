@@ -2,8 +2,10 @@
 
 namespace Resque\Pool;
 
+use Psr\Log\LogLevel;
 use Symfony\Component\Yaml\Yaml,
     Symfony\Component\Yaml\Exception\ParseException;
+use Psr\Log\LoggerInterface;
 
 /**
  * Configuration manager for php-resque-pool
@@ -50,13 +52,13 @@ class Configuration
      */
     public $handleWinch = false;
     /**
-     * @var Logger
+     * @var LoggerInterface
      */
     public $logger;
     /**
-     * @var integer self::LOG_*
+     * @var LogLevel::*
      */
-    public $logLevel = self::LOG_NONE;
+    public $logLevel = LogLevel::WARNING;
     /**
      * @var Platform
      */
@@ -85,6 +87,10 @@ class Configuration
      * @var integer
      */
     public $workerInterval = self::DEFAULT_WORKER_INTERVAL;
+    /**
+     * @var LoggerInterface
+     */
+    public $workerLogger;
 
     /**
      * @var array<string,int>
@@ -93,14 +99,16 @@ class Configuration
 
     /**
      * @param array<string,int>|string|null $config   Either a configuration array, path to yml
-     *                                    file containing config, or null
-     * @param Logger|null       $logger   If not provided one will be instantiated
-     * @param Platform|null     $platform If not provided one will be instantiated
+     *                                      file containing config, or null
+     * @param LoggerInterface|null          $logger   If not provided one will be instantiated
+     * @param Platform|null                 $platform If not provided one will be instantiated
+     * @param LoggerInterface|null          $workerLogger   If not provided one will be instantiated
      */
-    public function __construct($config = null, Logger $logger = null, Platform $platform = null)
+    public function __construct($config = null, $logger = null, $platform = null, $workerLogger = null)
     {
         $this->loadEnvironment();
-        $this->logger = $logger ?: new Logger($this->appName);
+        $this->logger = $logger ?: new Logger($this->appName, LogLevel::NOTICE);
+        $this->workerLogger = $workerLogger ?: new Logger($this->appName, $this->logLevel);
         $this->platform = $platform ?: new Platform;
 
         if (is_array($config)) {
@@ -125,7 +133,7 @@ class Configuration
         }
         // filter out the environments
         $this->queueConfig = array_filter($this->queueConfig, 'is_integer');
-        $this->logger->log("Configured queues: " . implode(" ", $this->knownQueues()));
+        $this->logger->notice("Configured queues: " . implode(" ", $this->knownQueues()));
     }
 
     /**
@@ -174,9 +182,9 @@ class Configuration
         $this->queueConfigFile = (string)getenv('RESQUE_POOL_CONFIG');
 
         if (getenv('VVERBOSE')) {
-            $this->logLevel = self::LOG_VERBOSE;
+            $this->logLevel = LogLevel::DEBUG;
         } elseif (getenv('LOGGING') || getenv('VERBOSE')) {
-            $this->logLevel = self::LOG_NORMAL;
+            $this->logLevel = LogLevel::NOTICE;
         }
     }
 
@@ -189,7 +197,7 @@ class Configuration
             if (file_exists($this->queueConfigFile)) {
                 return;
             }
-            $this->logger->log("Chosen config file '{$this->queueConfigFile}' not found. Looking for others.");
+            $this->logger->error("Chosen config file '{$this->queueConfigFile}' not found. Looking for others.");
         }
         $this->queueConfigFile = null;
         foreach ($this->configFiles as $file) {
@@ -206,7 +214,7 @@ class Configuration
     protected function loadQueueConfig()
     {
         if ($this->queueConfigFile && file_exists($this->queueConfigFile)) {
-            $this->logger->log("Loading config file: {$this->queueConfigFile}");
+            $this->logger->notice("Loading config file: {$this->queueConfigFile}");
             try {
                 if (preg_match("/\.php/", $this->queueConfigFile)) {
                     ob_start();
@@ -219,13 +227,13 @@ class Configuration
                 $this->queueConfig = Yaml::parse($queueConfig); // @phpstan-ignore-line
             } catch (ParseException $e) {
                 $msg = "Invalid config file: ".$e->getMessage();
-                $this->logger->log($msg);
+                $this->logger->error($msg);
 
                 throw new \RuntimeException($msg, 0, $e);
             }
         }
         if (!$this->queueConfig) {
-            $this->logger->log('No configuration loaded.');
+            $this->logger->error('No configuration loaded.');
             $this->queueConfig = array();
         }
     }

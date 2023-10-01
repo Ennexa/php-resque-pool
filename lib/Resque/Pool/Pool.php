@@ -2,6 +2,10 @@
 
 namespace Resque\Pool;
 
+use Psr\Log\LoggerInterface;
+use Resque_Worker;
+
+
 /**
  * Worker Pool for php-resque-pool
  *
@@ -24,7 +28,7 @@ class Pool
     private $config;
 
     /**
-     * @var Logger
+     * @var LoggerInterface
      */
     private $logger;
     /**
@@ -50,12 +54,12 @@ class Pool
     public function start()
     {
         $this->config->initialize();
-        $this->logger->procline('(starting)');
+        $this->procline('(starting)');
         $this->platform->trapSignals(self::$QUEUE_SIGS);
         $this->maintainWorkerCount();
 
-        $this->logger->procline('(started)');
-        $this->logger->log("started manager");
+        $this->procline('(started)');
+        $this->logger->notice("started manager", ['process' => 'manager']);
         $this->reportWorkerPoolPids();
     }
 
@@ -75,10 +79,10 @@ class Pool
                 $this->platform->sleep($this->config->sleepTime);
             }
 
-            $this->logger->procline(sprintf("managing [%s]", implode(' ', $this->allPids())));
+            $this->procline(sprintf("managing [%s]", implode(' ', $this->allPids())));
         }
-        $this->logger->procline("(shutting down)");
-        $this->logger->log("manager finished");
+        $this->procline("(shutting down)");
+        $this->logger->notice("manager finished", ['process' => 'manager']);
     }
 
     /**
@@ -92,21 +96,21 @@ class Pool
         case SIGUSR1:
         case SIGUSR2:
         case SIGCONT:
-            $this->logger->log("{$signal}: sending to all workers");
+            $this->logger->notice("{$signal}: sending to all workers", ['process' => 'manager']);
             $this->signalAllWorkers($signal);
             break;
         case SIGHUP:
-            $this->logger->log("HUP: reload config file");
+            $this->logger->notice("HUP: reload config file", ['process' => 'manager']);
             $this->config->resetQueues();
             $this->config->initialize();
-            $this->logger->log('HUP: gracefully shutdown old children (which have old logfiles open)');
+            $this->logger->notice('HUP: gracefully shutdown old children (which have old logfiles open)', ['process' => 'manager']);
             $this->signalAllWorkers(SIGQUIT);
-            $this->logger->log('HUP: new children will inherit new logfiles');
+            $this->logger->notice('HUP: new children will inherit new logfiles', ['process' => 'manager']);
             $this->maintainWorkerCount();
             break;
         case SIGWINCH:
             if ($this->config->handleWinch) {
-                $this->logger->log('WINCH: gracefully stopping all workers');
+                $this->logger->notice('WINCH: gracefully stopping all workers', ['process' => 'manager']);
                 $this->config->resetQueues();
                 $this->maintainWorkerCount();
             }
@@ -145,10 +149,10 @@ class Pool
     public function reportWorkerPoolPids()
     {
         if (count($this->workers) === 0) {
-            $this->logger->log('Pool is empty');
+            $this->logger->notice('Pool is empty', ['process' => 'manager']);
         } else {
             $pids = $this->allPids();
-            $this->logger->log("Pool contains worker PIDs: ".implode(', ', $pids));
+            $this->logger->notice("Pool contains worker PIDs: ".implode(', ', $pids), ['process' => 'manager']);
         }
     }
 
@@ -181,7 +185,7 @@ class Pool
     {
         while ($exited = $this->platform->nextDeadChild($wait)) {
             list($wpid, $exit) = $exited;
-            $this->logger->log("Reaped resque worker {$wpid} (status: {$exit}) queues: ". $this->workerQueues($wpid));
+            $this->logger->notice("Reaped resque worker {$wpid} (status: {$exit}) queues: ". $this->workerQueues($wpid), ['process' => 'manager']);
             $this->deleteWorker($wpid);
         }
     }
@@ -241,7 +245,7 @@ class Pool
      */
     public function gracefulWorkerShutdownAndWait($signal)
     {
-        $this->logger->log("{$signal}: graceful shutdown, waiting for children");
+        $this->logger->notice("{$signal}: graceful shutdown, waiting for children", ['process' => 'manager']);
         $this->signalAllWorkers(SIGQUIT);
         $this->reapAllWorkers(true); // will hang until all workers are shutdown
     }
@@ -252,7 +256,7 @@ class Pool
      */
     public function gracefulWorkerShutdown($signal)
     {
-        $this->logger->log("{$signal}: immediate shutdown (graceful worker shutdown)");
+        $this->logger->notice("{$signal}: immediate shutdown (graceful worker shutdown)", ['process' => 'manager']);
         $this->signalAllWorkers(SIGQUIT);
     }
 
@@ -262,7 +266,7 @@ class Pool
      */
     public function shutdownEverythingNow($signal)
     {
-        $this->logger->log("{$signal}: immediate shutdown (and immediate worker shutdown)");
+        $this->logger->notice("{$signal}: immediate shutdown (and immediate worker shutdown)", ['process' => 'manager']);
         $this->signalAllWorkers(SIGTERM);
     }
 
@@ -317,15 +321,16 @@ class Pool
     {
         $pid = $this->platform->pcntl_fork();
         if ($pid === -1) {
-            $this->logger->log('pcntl_fork failed');
+            $this->logger->notice('pcntl_fork failed', ['process' => 'manager']);
             $this->platform->_exit(1);
         } elseif ($pid === 0) {
             $this->platform->releaseSignals();
+            /** @var Resque_Worker */
             $worker = $this->createWorker($queues);
-            $this->logger->logWorker("Starting worker {$worker}");
-            $this->logger->procline("Starting worker {$worker}");
+            $this->logger->info("Starting worker {$worker}", ['process' => 'worker']);
+            $this->procline("Starting worker {$worker}");
             $this->callAfterPrefork($worker);
-            $worker->work($this->config->workerInterval); // @phpstan-ignore-line
+            $worker->work($this->config->workerInterval);
             $this->platform->_exit(0);
         } else {
             $this->workers[$queues][$pid] = true;
@@ -352,12 +357,23 @@ class Pool
         $queues = explode(',', $queues);
         $class = $this->config->workerClass;
         $worker = new $class($queues);
-        if ($this->config->logLevel === Configuration::LOG_VERBOSE) {
-            $worker->logLevel = \Resque_Worker::LOG_VERBOSE; // @phpstan-ignore-line
-        } elseif ($this->config->logLevel === Configuration::LOG_NORMAL) {
-            $worker->logLevel = \Resque_Worker::LOG_NORMAL; // @phpstan-ignore-line
-        }
+        $worker->setLogger($this->config->workerLogger); // @phpstan-ignore-line
 
         return $worker;
+    }
+
+    /**
+     * @param string $string
+     * @return void
+     */
+    protected function procline($string)
+    {
+        $appName = $this->config->appName ? "[{$this->config->appName}]" : '';
+
+        if (function_exists('setproctitle')) {
+            setproctitle("resque-pool-manager{$appName}: {$string}");
+        } elseif (function_exists('cli_set_process_title') && PHP_OS !== 'Darwin') {
+            cli_set_process_title("resque-pool-manager{$appName}: {$string}");
+        }
     }
 }

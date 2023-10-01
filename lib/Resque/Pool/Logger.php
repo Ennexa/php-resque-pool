@@ -2,6 +2,11 @@
 
 namespace Resque\Pool;
 
+use Psr\Log\AbstractLogger;
+use Psr\Log\LoggerTrait;
+use Psr\Log\LogLevel;
+
+
 /**
  * Logger for php-resque-pool
  *
@@ -11,50 +16,53 @@ namespace Resque\Pool;
  * @copyright (c) 2012 Erik Bernhardson
  * @license   http://www.opensource.org/licenses/mit-license.php
  */
-class Logger
+class Logger extends AbstractLogger
 {
+    use LoggerTrait;
+
+    /** @var array<string, int> */
+    protected static $logLevels = [
+        LogLevel::EMERGENCY => 0,
+        LogLevel::ALERT     => 1,
+        LogLevel::CRITICAL  => 2,
+        LogLevel::ERROR     => 3,
+        LogLevel::WARNING   => 4,
+        LogLevel::NOTICE    => 5,
+        LogLevel::INFO      => 6,
+        LogLevel::DEBUG     => 7,
+    ];
+
+    /** @var LogLevel::* */
+    protected $logLevel;
+
     /** @var string */
     private $appName;
 
     /**
      * @param null|string $appName
+     * @param LogLevel::* $logLevel
      */
-    public function __construct($appName = null)
+    public function __construct($appName = null, $logLevel = LogLevel::WARNING)
     {
         $this->appName = $appName ? "[{$appName}]" : "";
+        $this->logLevel = $logLevel;
     }
 
     /**
-     * @param string $string
+     * @param LogLevel::* $level
+     * @param string $message
+     * @param mixed[] $context
      * @return void
      */
-    public function procline($string)
+    public function log($level, $message, array $context = array())
     {
-        if (function_exists('setproctitle')) {
-            setproctitle("resque-pool-manager{$this->appName}: {$string}");
-        } elseif (function_exists('cli_set_process_title') && PHP_OS !== 'Darwin') {
-            cli_set_process_title("resque-pool-manager{$this->appName}: {$string}");
+        if (!$this->shouldLog($level)) {
+            return;
         }
-    }
 
-    /**
-     * @param string $message
-     * @return void
-     */
-    public function log($message)
-    {
-        $pid = getmypid();
-        echo "resque-pool-manager{$this->appName}[{$pid}]: {$message}\n";
-    }
+        $formattedMessage = $this->formatMessage($level, $message, $context);
 
-    /**
-     * @param string $message
-     * @return void
-     */
-    public function logWorker($message)
-    {
-        $pid = getmypid();
-        echo "resque-pool-worker{$this->appName}[{$pid}]: {$message}\n";
+        fwrite(STDOUT, $formattedMessage . PHP_EOL);
     }
 
     /**
@@ -64,5 +72,35 @@ class Logger
     public function rotate()
     {
         // not possible in php?
+    }
+
+    /**
+     * @param LogLevel::* $level
+     * @param string $message
+     * @param mixed[] $context
+     * @return string
+     */
+    protected function formatMessage($level, $message, array $context)
+    {
+        $pid = getmypid();
+        $process = "resque-pool-{process}{$this->appName}[{$pid}]";
+        $context += ['process' => 'worker'];
+
+        // Interpolate context values into the message placeholders
+        $replace = [];
+        foreach ($context as $key => $val) {
+            $replace['{' . $key . '}'] = $val;
+        }
+
+        return strtr($process . ' ' . $message, $replace);
+    }
+
+    /**
+     * @param LogLevel::* $level
+     * @return bool
+     */
+    protected function shouldLog($level)
+    {
+        return self::$logLevels[$level] <= self::$logLevels[$this->logLevel];
     }
 }
