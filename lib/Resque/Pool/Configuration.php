@@ -6,6 +6,7 @@ use Psr\Log\LogLevel;
 use Symfony\Component\Yaml\Yaml,
     Symfony\Component\Yaml\Exception\ParseException;
 use Psr\Log\LoggerInterface;
+use Resque\Worker\ResqueWorker;
 
 /**
  * Configuration manager for php-resque-pool
@@ -82,7 +83,7 @@ class Configuration
     /**
      * @var string
      */
-    public $workerClass = '\\Resque_Worker';
+    public $workerClass = ResqueWorker::class;
     /**
      * @var integer
      */

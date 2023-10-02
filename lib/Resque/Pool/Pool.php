@@ -3,7 +3,7 @@
 namespace Resque\Pool;
 
 use Psr\Log\LoggerInterface;
-use Resque_Worker;
+use Resque\Worker\ResqueWorker;
 
 
 /**
@@ -325,7 +325,7 @@ class Pool
             $this->platform->_exit(1);
         } elseif ($pid === 0) {
             $this->platform->releaseSignals();
-            /** @var Resque_Worker */
+            /** @var ResqueWorker */
             $worker = $this->createWorker($queues);
             $this->logger->info("Starting worker {$worker}", ['process' => 'worker']);
             $this->procline("Starting worker {$worker}");
