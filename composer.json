@@ -30,7 +30,6 @@
     "bin": [
         "bin/resque-pool"
     ],
-    "target-dir": "",
     "scripts": {
         "phpstan": "phpstan analyse --memory-limit=2G"
     }
